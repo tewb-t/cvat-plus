@@ -192,7 +192,6 @@ export default function AnnotationTopBarComponent(props: Props): JSX.Element {
             inputFrameRef={inputFrameRef}
             keyMap={keyMap}
             workspace={workspace}
-            jobInstance={jobInstance}
             onSliderChange={onSliderChange}
             onInputChange={onInputChange}
             onURLIconClick={onURLIconClick}
