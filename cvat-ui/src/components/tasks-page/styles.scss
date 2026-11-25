@@ -189,6 +189,7 @@
 }
 
 .cvat-task-card-preview-link {
+    position: relative;
     grid-area: preview;
     display: flex;
     align-items: center;
@@ -202,6 +203,65 @@
     .cvat-task-item-preview-wrapper {
         width: 100%;
         height: 100%;
+    }
+}
+
+// The hover preview covers the existing thumbnail and displays a single frame.
+.cvat-task-video-hover-preview {
+    position: absolute;
+    z-index: 2;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #111;
+    pointer-events: none;
+
+    > img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        animation: cvat-task-video-preview-frame-in 180ms ease-out;
+    }
+}
+
+.cvat-task-video-hover-preview-counter {
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    max-width: calc(100% - 10px);
+    overflow: hidden;
+    padding: 2px 5px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    font-size: 10px;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cvat-task-video-hover-preview-message {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 5px;
+    color: #fff;
+    font-size: 11px;
+    text-align: center;
+}
+
+@keyframes cvat-task-video-preview-frame-in {
+    from {
+        opacity: 0.35;
+    }
+
+    to {
+        opacity: 1;
     }
 }
 

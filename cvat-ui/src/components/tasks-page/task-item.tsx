@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import dayjs from 'dayjs';
 import Text from 'antd/lib/typography/Text';
@@ -45,6 +45,79 @@ interface JobsListResponse {
 }
 
 type TaskIndicatorStatus = 'empty' | 'new' | 'in-progress' | 'complete';
+
+
+const VIDEO_PREVIEW_FRAME_INTERVAL_MS = 800;
+
+interface VideoPreviewFrame {
+    frameNumber: number;
+    src: string;
+}
+
+/**
+ * Pick a small number of evenly spaced frames. Keep the request count bounded
+ * so hovering a card does not download an entire video.
+ */
+function getVideoPreviewFrameNumbers(frameCount: number): number[] {
+    if (!Number.isFinite(frameCount) || frameCount <= 0) {
+        return [];
+    }
+
+    const totalFrames = Math.floor(frameCount);
+    const sampleCount = Math.min(
+        totalFrames,
+        totalFrames <= 120 ? 3 : totalFrames <= 600 ? 4 : 5,
+    );
+
+    if (sampleCount === 1) {
+        return [0];
+    }
+
+    return Array.from({ length: sampleCount }, (_value, index) => (
+        Math.round((index * (totalFrames - 1)) / (sampleCount - 1))
+    ));
+}
+
+/**
+ * Retrieve one compressed frame using CVAT's task-data endpoint. This uses
+ * same-origin credentials, matching the authenticated jobs request already
+ * used by this component.
+ */
+async function getVideoPreviewFrame(
+    taskID: number,
+    frameNumber: number,
+    signal: AbortSignal,
+): Promise<VideoPreviewFrame | null> {
+    try {
+        const query = new URLSearchParams({
+            type: 'frame',
+            number: String(frameNumber),
+            quality: 'compressed',
+        });
+        const response = await fetch(`/api/tasks/${taskID}/data/?${query.toString()}`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            signal,
+        });
+
+        if (!response.ok) {
+            return null;
+        }
+
+        const imageBlob = await response.blob();
+        if (signal.aborted || imageBlob.size === 0) {
+            return null;
+        }
+
+        return {
+            frameNumber,
+            src: URL.createObjectURL(imageBlob),
+        };
+    } catch (_error) {
+        // A preview failure must not affect the task card or its normal thumbnail.
+        return null;
+    }
+}
 
 /**
  * Load all jobs belonging to one task. The jobs endpoint is paginated, so follow
@@ -184,6 +257,13 @@ function TaskItemComponent(props: TaskItemProps): JSX.Element {
         },
     );
     const [taskJobs, setTaskJobs] = useState<TaskJobStatus[] | null>(null);
+    const [videoPreviewHovered, setVideoPreviewHovered] = useState(false);
+    const [videoPreviewLoading, setVideoPreviewLoading] = useState(false);
+    const [videoPreviewError, setVideoPreviewError] = useState(false);
+    const [videoPreviewFrames, setVideoPreviewFrames] = useState<VideoPreviewFrame[]>([]);
+    const [videoPreviewFrameIndex, setVideoPreviewFrameIndex] = useState(0);
+    const videoPreviewRequest = useRef<AbortController | null>(null);
+    const videoPreviewObjectURLs = useRef<string[]>([]);
 
     useEffect(() => {
         if (importingState !== null && activeRequest !== null) {
@@ -221,6 +301,86 @@ function TaskItemComponent(props: TaskItemProps): JSX.Element {
     }, []);
 
     const { id } = taskInstance;
+    const frameCount = Number(taskInstance.size ?? 0);
+    const taskMode = String(taskInstance.mode ?? '').toLowerCase();
+    const mediaType = String(taskInstance.mediaType ?? taskInstance.media_type ?? '').toLowerCase();
+    // CVAT uses interpolation mode for video tasks. mediaType is included for
+    // versions that expose it explicitly.
+    const isVideoTask = frameCount > 1 && (taskMode === 'interpolation' || mediaType === 'video');
+
+    // Revoke downloaded image URLs and cancel any pending requests on unmount.
+    useEffect(() => () => {
+        videoPreviewRequest.current?.abort();
+        videoPreviewObjectURLs.current.forEach((url) => URL.revokeObjectURL(url));
+        videoPreviewObjectURLs.current = [];
+    }, []);
+
+    // Advance one visible frame at a time while the pointer remains over the image.
+    useEffect(() => {
+        if (!videoPreviewHovered || videoPreviewFrames.length < 2) {
+            return undefined;
+        }
+
+        const intervalID = window.setInterval(() => {
+            setVideoPreviewFrameIndex((currentIndex) => (
+                (currentIndex + 1) % videoPreviewFrames.length
+            ));
+        }, VIDEO_PREVIEW_FRAME_INTERVAL_MS);
+
+        return () => window.clearInterval(intervalID);
+    }, [videoPreviewFrames.length, videoPreviewHovered]);
+
+    const loadVideoPreview = useCallback(async (): Promise<void> => {
+        // A cached preview is reused on subsequent hovers. The ref also prevents
+        // duplicate downloads when enter/focus events fire close together.
+        if (!isVideoTask || videoPreviewFrames.length > 0 || videoPreviewRequest.current) {
+            return;
+        }
+
+        const controller = new AbortController();
+        videoPreviewRequest.current = controller;
+        setVideoPreviewLoading(true);
+        setVideoPreviewError(false);
+
+        try {
+            const frameNumbers = getVideoPreviewFrameNumbers(frameCount);
+            const results = await Promise.all(frameNumbers.map((frameNumber) => (
+                getVideoPreviewFrame(Number(id), frameNumber, controller.signal)
+            )));
+            const frames = results.filter((frame): frame is VideoPreviewFrame => frame !== null);
+
+            if (controller.signal.aborted) {
+                frames.forEach((frame) => URL.revokeObjectURL(frame.src));
+                return;
+            }
+
+            videoPreviewObjectURLs.current.push(...frames.map((frame) => frame.src));
+            setVideoPreviewFrames(frames);
+            setVideoPreviewFrameIndex(0);
+            setVideoPreviewError(frames.length === 0);
+        } finally {
+            if (videoPreviewRequest.current === controller) {
+                videoPreviewRequest.current = null;
+            }
+
+            if (!controller.signal.aborted) {
+                setVideoPreviewLoading(false);
+            }
+        }
+    }, [frameCount, id, isVideoTask, videoPreviewFrames.length]);
+
+    const handleVideoPreviewMouseEnter = (): void => {
+        setVideoPreviewFrameIndex(0);
+        setVideoPreviewHovered(true);
+        void loadVideoPreview();
+    };
+
+    const handleVideoPreviewMouseLeave = (): void => {
+        setVideoPreviewHovered(false);
+        setVideoPreviewFrameIndex(0);
+    };
+
+    const activeVideoPreviewFrame = videoPreviewFrames[videoPreviewFrameIndex] ?? null;
 
     useEffect(() => {
         const controller = new AbortController();
@@ -251,7 +411,6 @@ function TaskItemComponent(props: TaskItemProps): JSX.Element {
     const owner = taskInstance.owner ? taskInstance.owner.username : null;
     const updated = dayjs(taskInstance.updatedDate).fromNow();
     const created = dayjs(taskInstance.createdDate).format('MMMM Do YYYY');
-    const frameCount = Number(taskInstance.size ?? 0);
     const taskStatus = String(taskInstance.status ?? '').toLowerCase();
     const taskIndicatorStatus = getTaskIndicatorStatus(taskJobs, taskStatus);
     const taskIndicatorLabel: Record<TaskIndicatorStatus, string> = {
@@ -368,6 +527,10 @@ function TaskItemComponent(props: TaskItemProps): JSX.Element {
                 className='cvat-task-card-preview-link'
                 aria-label={`Open task ${taskInstance.name}`}
                 onClick={(event) => event.stopPropagation()}
+                onMouseEnter={isVideoTask ? handleVideoPreviewMouseEnter : undefined}
+                onMouseLeave={isVideoTask ? handleVideoPreviewMouseLeave : undefined}
+                onFocus={isVideoTask ? handleVideoPreviewMouseEnter : undefined}
+                onBlur={isVideoTask ? handleVideoPreviewMouseLeave : undefined}
             >
                 <Preview
                     task={taskInstance}
@@ -376,6 +539,32 @@ function TaskItemComponent(props: TaskItemProps): JSX.Element {
                     previewWrapperClassName='cvat-task-item-preview-wrapper'
                     previewClassName='cvat-task-item-preview'
                 />
+                {isVideoTask && videoPreviewHovered && (activeVideoPreviewFrame || videoPreviewError) && (
+                    <div
+                        className='cvat-task-video-hover-preview'
+                        role='group'
+                        aria-label='Video frame preview'
+                        aria-busy={videoPreviewLoading}
+                    >
+                        {activeVideoPreviewFrame ? (
+                            <>
+                                <img
+                                    key={activeVideoPreviewFrame.frameNumber}
+                                    src={activeVideoPreviewFrame.src}
+                                    alt={`Video frame ${activeVideoPreviewFrame.frameNumber + 1}`}
+                                    draggable={false}
+                                />
+                                <span className='cvat-task-video-hover-preview-counter'>
+                                    Frame {activeVideoPreviewFrame.frameNumber + 1}
+                                </span>
+                            </>
+                        ) : (
+                            <span className='cvat-task-video-hover-preview-message'>
+                                Video preview unavailable
+                            </span>
+                        )}
+                    </div>
+                )}
             </Link>
 
             <div className='cvat-task-card-details'>
