@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: MIT
 
 import React, {
-    useState, useEffect, useCallback, CSSProperties,
+    useState, useEffect, useCallback, useRef, CSSProperties,
 } from 'react';
-
+import { useSelector } from 'react-redux';
 import { Row, Col } from 'antd/lib/grid';
 import Icon, {
     LinkOutlined, DeleteOutlined, CopyOutlined, SearchOutlined,
@@ -17,7 +17,6 @@ import Text from 'antd/lib/typography/Text';
 import Modal from 'antd/lib/modal';
 import message from 'antd/lib/message';
 import Tooltip from 'antd/lib/tooltip';
-
 import { Workspace, CombinedState } from 'reducers';
 import { RestoreIcon } from 'icons';
 import { registerComponentShortcuts } from 'actions/shortcuts-actions';
@@ -27,7 +26,9 @@ import GlobalHotKeys, { KeyMap } from 'utils/mousetrap-react';
 import { ShortcutScope } from 'utils/enums';
 import { subKeyMap } from 'utils/component-subkeymap';
 import { Chapter } from 'cvat-core/src/frames';
+import { Job } from 'cvat-core-wrapper';
 import { usePlugins } from 'utils/hooks';
+import './frame-preview.scss';
 
 interface Props {
     startFrame: number;
@@ -47,6 +48,7 @@ interface Props {
     inputFrameRef: React.RefObject<HTMLInputElement>;
     keyMap: KeyMap;
     workspace: Workspace;
+    jobInstance: Job;
     onSliderChange(value: number): void;
     onInputChange(value: number): void;
     onURLIconClick(): void;
@@ -56,6 +58,16 @@ interface Props {
     switchNavigationBlocked(blocked: boolean): void;
     switchShowSearchPallet(visible: boolean): void;
 }
+
+interface HoverPreview {
+    frame: number;
+    left: number;
+    imageData: ImageBitmap | Blob | null;
+}
+
+const HOVER_PREVIEW_CONTENT_WIDTH = 180;
+const HOVER_PREVIEW_BOX_WIDTH = 196;
+const HOVER_PREVIEW_DELAY = 120;
 
 const componentShortcuts = {
     DELETE_FRAME: {
@@ -99,6 +111,7 @@ function PlayerNavigation(props: Props): JSX.Element {
         ranges,
         keyMap,
         workspace,
+        jobInstance,
         onSliderChange,
         onInputChange,
         onURLIconClick,
@@ -111,11 +124,180 @@ function PlayerNavigation(props: Props): JSX.Element {
     } = props;
 
     const [frameInputValue, setFrameInputValue] = useState<number>(frameNumber);
+    const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
+
+    const frameFetching = useSelector(
+        (state: CombinedState) => state.annotation.player.frame.fetching,
+    );
+
+    const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const previewTimeoutRef = useRef<number | null>(null);
+    const previewRequestIdRef = useRef(0);
+    const requestedFrameRef = useRef<number | null>(null);
 
     const playerSliderPlugins = usePlugins(
         (state: CombinedState) => state.plugins.components.annotationPage.player.slider,
         props,
     );
+
+    const hideHoverPreview = useCallback((): void => {
+        // Invalidate pending and in-flight preview requests.
+        previewRequestIdRef.current += 1;
+        requestedFrameRef.current = null;
+
+        if (previewTimeoutRef.current !== null) {
+            window.clearTimeout(previewTimeoutRef.current);
+            previewTimeoutRef.current = null;
+        }
+
+        setHoverPreview(null);
+    }, []);
+
+    const onSliderMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>): void => {
+        console.log('[CVAT PREVIEW] Mouse detected', {
+            playing,
+            frameFetching,
+            startFrame,
+            stopFrame,
+        });
+        // Do not compete with the normal annotation frame decoder.
+        if (playing || frameFetching || stopFrame <= startFrame) {
+            return;
+        }
+
+        const rail = event.currentTarget.querySelector<HTMLElement>('.ant-slider-rail');
+        if (!rail) {
+            return;
+        }
+
+        const railRect = rail.getBoundingClientRect();
+        const containerRect = event.currentTarget.getBoundingClientRect();
+        if (!railRect.width || !containerRect.width) {
+            return;
+        }
+
+        const ratio = clamp((event.clientX - railRect.left) / railRect.width, 0, 1);
+        const frame = Math.round(startFrame + ratio * (stopFrame - startFrame));
+        const halfPreviewWidth = HOVER_PREVIEW_BOX_WIDTH / 2;
+        const left = clamp(
+            event.clientX - containerRect.left,
+            halfPreviewWidth,
+            Math.max(halfPreviewWidth, containerRect.width - halfPreviewWidth),
+        );
+
+        setHoverPreview((current) => (
+            current?.frame === frame
+                ? { ...current, left }
+                : { frame, left, imageData: null }
+        ));
+
+        // Moving within the same frame only repositions the tooltip.
+        if (requestedFrameRef.current === frame) {
+            return;
+        }
+
+        requestedFrameRef.current = frame;
+
+        if (previewTimeoutRef.current !== null) {
+            window.clearTimeout(previewTimeoutRef.current);
+        }
+
+        const requestId = ++previewRequestIdRef.current;
+        previewTimeoutRef.current = window.setTimeout(async () => {
+            previewTimeoutRef.current = null;
+
+            console.log('[CVAT PREVIEW] Requesting frame:', frame);
+            try {
+                // Use CVAT's existing frame/chunk cache. This does not change the current frame.
+                const frameData = await jobInstance.frames.get(frame, false, 1);
+                const { imageData } = await frameData.data();
+                console.log('[CVAT PREVIEW] Frame retrieved:', {
+                    frame,
+                    imageData,
+                    type: imageData?.constructor?.name,
+                });
+
+                // Ignore results from older pointer positions or after navigation/playback starts.
+                if (
+                    previewRequestIdRef.current !== requestId ||
+                    playing ||
+                    frameFetching
+                ) {
+                    return;
+                }
+
+                setHoverPreview((current) => (
+                    current?.frame === frame ? { ...current, imageData } : current
+                ));
+            } catch (error) {
+                console.error('[CVAT PREVIEW] Frame retrieval failed:', error);
+            }
+            }
+        }, HOVER_PREVIEW_DELAY);
+    }, [frameFetching, jobInstance, playing, startFrame, stopFrame]);
+
+    const previewImageData = hoverPreview?.imageData ?? null;
+
+    useEffect(() => {
+        if (!previewImageData || !previewCanvasRef.current) {
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        const drawPreview = async (): Promise<void> => {
+            const createdFromBlob = previewImageData instanceof Blob;
+            const bitmap = createdFromBlob
+                ? await createImageBitmap(previewImageData)
+                : previewImageData;
+
+            if (cancelled) {
+                if (createdFromBlob) {
+                    bitmap.close();
+                }
+                return;
+            }
+
+            const canvas = previewCanvasRef.current;
+            const context = canvas?.getContext('2d');
+            if (canvas && context) {
+                const scale = Math.min(
+                    1,
+                    HOVER_PREVIEW_CONTENT_WIDTH / bitmap.width,
+                    110 / bitmap.height,
+                );
+                canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+                canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+                context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            }
+
+            // CVAT owns ImageBitmaps returned from its frame cache. Close only our Blob copy.
+            if (createdFromBlob) {
+                bitmap.close();
+            }
+        };
+
+        drawPreview().catch(() => {
+            // A failed preview render must not interrupt annotation.
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [previewImageData]);
+
+    useEffect(() => {
+        if (playing || frameFetching) {
+            hideHoverPreview();
+        }
+    }, [frameFetching, hideHoverPreview, playing]);
+
+    useEffect(() => () => {
+        previewRequestIdRef.current += 1;
+        if (previewTimeoutRef.current !== null) {
+            window.clearTimeout(previewTimeoutRef.current);
+        }
+    }, []);
 
     useEffect(() => {
         if (frameNumber !== frameInputValue) {
@@ -217,34 +399,59 @@ function PlayerNavigation(props: Props): JSX.Element {
             <Col className='cvat-player-controls'>
                 <Row align='bottom'>
                     <Col style={{ position: 'relative' }}>
-                        <Slider
-                            className='cvat-player-slider'
-                            min={startFrame}
-                            max={stopFrame}
-                            marks={marks}
-                            value={frameNumber || 0}
-                            onChange={workspace !== Workspace.SINGLE_SHAPE ? onSliderChange : undefined}
-                        />
-                        {!!ranges && (
-                            <svg className='cvat-player-slider-progress' viewBox='0 0 1000 16' xmlns='http://www.w3.org/2000/svg'>
-                                {ranges.split(';').map((range) => {
-                                    const [rangeStart, rangeStop] = range.split(':').map((num) => +num);
-                                    const totalSegments = stopFrame - startFrame + 1;
-                                    const segmentWidth = 1000 / totalSegments;
-                                    const width = (rangeStop - rangeStart + 1) * segmentWidth;
-                                    const offset = (Math.max((rangeStart - startFrame), 0) / totalSegments) * 1000;
-                                    return (
-                                        <rect rx={10} key={rangeStart} x={offset} y={0} height={16} width={width} />
-                                    );
+                        <div
+                            className='cvat-player-slider-hover-area'
+                            onMouseMove={onSliderMouseMove}
+                            onMouseLeave={hideHoverPreview}
+                        >
+                            <Slider
+                                className='cvat-player-slider'
+                                min={startFrame}
+                                max={stopFrame}
+                                marks={marks}
+                                value={frameNumber || 0}
+                                onChange={workspace !== Workspace.SINGLE_SHAPE ? onSliderChange : undefined}
+                            />
+                            {hoverPreview && (
+                                <div
+                                    className='cvat-player-frame-preview'
+                                    style={{ left: hoverPreview.left }}
+                                >
+                                    {hoverPreview.imageData ? (
+                                        <canvas ref={previewCanvasRef} />
+                                    ) : (
+                                        <div className='cvat-player-frame-preview-placeholder'>
+                                            Loading frame...
+                                        </div>
+                                    )}
+                                    <span>Frame {hoverPreview.frame}</span>
+                                </div>
+                            )}
+                            {!!ranges && (
+                                <svg
+                                    className='cvat-player-slider-progress'
+                                    viewBox='0 0 1000 16'
+                                    xmlns='http://www.w3.org/2000/svg'
+                                >
+                                    {ranges.split(';').map((range) => {
+                                        const [rangeStart, rangeStop] = range.split(':').map((num) => +num);
+                                        const totalSegments = stopFrame - startFrame + 1;
+                                        const segmentWidth = 1000 / totalSegments;
+                                        const width = (rangeStop - rangeStart + 1) * segmentWidth;
+                                        const offset = (Math.max((rangeStart - startFrame), 0) / totalSegments) * 1000;
+                                        return (
+                                            <rect rx={10} key={rangeStart} x={offset} y={0} height={16} width={width} />
+                                        );
+                                    })}
+                                </svg>
+                            )}
+                            {playerSliderPlugins
+                                .sort((a, b) => a.weight - b.weight)
+                                .map(({ component: Component }, index) => {
+                                    const ComponentToRender = Component as React.ComponentType<any>;
+                                    return <ComponentToRender key={index} targetProps={props} />;
                                 })}
-                            </svg>
-                        )}
-                        {playerSliderPlugins
-                            .sort((a, b) => a.weight - b.weight)
-                            .map(({ component: Component }, index) => {
-                                const ComponentToRender = Component as React.ComponentType<any>;
-                                return <ComponentToRender key={index} targetProps={props} />;
-                            })}
+                        </div>
                     </Col>
                 </Row>
                 <Row justify='center'>
