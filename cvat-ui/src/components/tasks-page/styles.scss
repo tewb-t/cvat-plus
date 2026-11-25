@@ -53,15 +53,42 @@
 
 .cvat-tasks-list {
     overflow-y: auto;
+
+    .ant-ribbon-wrapper {
+        width: 100%;
+        margin: $grid-unit-size * 0.5;
+    }
 }
 
+.cvat-task-item-ribbon {
+    padding: $grid-unit-size;
+    height: unset;
+
+    > .ant-ribbon-text {
+        > div {
+            display: flex;
+            flex-direction: column;
+            gap: $grid-unit-size * 2;
+        }
+    }
+}
+
+// Default task presentation: horizontal list row.
 .cvat-tasks-list-item {
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: 140px minmax(180px, 1fr) minmax(190px, 0.9fr) 110px 42px;
+    grid-template-areas: 'preview details progress metadata header';
+    align-items: center;
+    column-gap: $grid-unit-size * 2;
+
     width: 100%;
-    height: 120px;
+    min-height: 120px;
+    height: auto;
     border: 1px solid $border-color-1;
     border-radius: $border-radius-base;
     margin-bottom: $grid-unit-size * 2;
-    padding-top: $grid-unit-size * 2;
+    padding: $grid-unit-size * 2;
     background: $background-color-1;
 
     &:hover {
@@ -72,23 +99,198 @@
     .cvat-task-item-loading-preview,
     .cvat-task-item-empty-preview {
         @extend .cvat-base-preview;
-
-        font-size: $grid-unit-size * 6;
-        height: $grid-unit-size * 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 80px;
+        font-size: $grid-unit-size * 4;
     }
 
     .cvat-task-item-preview-wrapper {
         display: flex;
+        align-items: center;
         justify-content: center;
         overflow: hidden;
-        margin: $grid-unit-size * 3;
-        margin-top: 0;
+        width: 100%;
+        height: 80px;
+        margin: 0;
 
         > .cvat-task-item-preview {
             max-width: 140px;
             max-height: 80px;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
         }
     }
+}
+
+.cvat-task-card-header {
+    grid-area: header;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: $grid-unit-size;
+    min-width: 0;
+}
+
+.cvat-task-card-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.cvat-task-status-dot {
+    display: inline-block;
+    flex: 0 0 auto;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+}
+
+// One status dot per task: annotation = new, validation = in progress, completed = complete.
+.cvat-task-status-empty {
+    background: #858585;
+}
+
+.cvat-task-status-new {
+    background: #3B82F6;
+}
+
+.cvat-task-status-in-progress {
+    background: #E5C229;
+}
+
+.cvat-task-status-complete {
+    background: #35A52B;
+}
+
+.cvat-task-card-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    border: 0;
+    padding: 2px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+
+    .anticon {
+        transform: rotate(90deg);
+    }
+
+    &:hover {
+        opacity: 0.72;
+    }
+}
+
+.cvat-task-card-preview-link {
+    grid-area: preview;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-width: 0;
+    height: 80px;
+    overflow: hidden;
+    text-decoration: none;
+
+    .cvat-task-item-preview-wrapper {
+        width: 100%;
+        height: 100%;
+    }
+}
+
+.cvat-task-card-details {
+    grid-area: details;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.cvat-task-card-title-link {
+    display: block;
+    min-width: 0;
+    color: inherit;
+    text-decoration: none;
+
+    &:hover {
+        text-decoration: underline;
+    }
+}
+
+.cvat-task-card-title {
+    overflow: hidden;
+    width: 100%;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cvat-task-card-id {
+    color: #929292;
+}
+
+.cvat-task-card-name {
+    color: inherit;
+}
+
+.cvat-task-card-subtitle {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: $grid-unit-size;
+    overflow: hidden;
+    color: #929292;
+    font-size: 12px;
+    line-height: 1.35;
+
+    > span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
+
+.cvat-task-card-progress {
+    grid-area: progress;
+    min-width: 0;
+}
+
+.cvat-task-card-progress-content {
+    min-width: 0;
+
+    .ant-progress {
+        margin: 3px 0 0;
+    }
+}
+
+.cvat-task-item-progress-labels {
+    overflow-wrap: anywhere;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.cvat-task-card-metadata {
+    grid-area: metadata;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 40px;
+    padding: 4px 8px;
+    border-radius: 2px;
+    background: $background-color-1;
+    color: inherit;
+    font-size: 18px;
+    font-weight: 400;
+    text-align: center;
+    white-space: nowrap;
 }
 
 .cvat-task-item-description {
@@ -103,10 +305,10 @@
 
 .cvat-task-completed-progress {
     color: $completed-progress-color;
-}
 
-.cvat-task-completed-progress div.ant-progress-bg {
-    background: $completed-progress-color !important;
+    div.ant-progress-bg {
+        background: $completed-progress-color !important;
+    }
 }
 
 .cvat-task-validation-progress {
@@ -126,7 +328,7 @@
             font-size: 12px;
         }
 
-        span[role="img"] {
+        span[role='img'] {
             margin-left: $grid-unit-size;
         }
     }
@@ -162,12 +364,207 @@
     @extend .cvat-text-color;
 }
 
-.cvat-task-item-title-link {
-    display: inline-block;
-    color: inherit;
-    text-decoration: none;
+// Project task grid view: five compact cards per row on wide screens.
+.cvat-project-tasks-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: start;
+    gap: 12px;
+    width: 100%;
 
-    &:hover {
-        text-decoration: underline;
+    // TaskItem may be rendered inside this list container by CVAT.
+    .cvat-tasks-list {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        align-items: start;
+        gap: 12px;
+        width: 100%;
+        min-width: 0;
+        overflow: visible;
     }
+
+    .ant-ribbon-wrapper {
+        width: 100%;
+        min-width: 0;
+        margin: 0;
+    }
+
+    .cvat-task-card {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+        max-width: none;
+        min-width: 0;
+        min-height: 0;
+        height: auto;
+        align-self: start;
+        justify-content: flex-start;
+        padding: 8px 10px 10px;
+        border: 1px solid $border-color-1;
+        border-radius: 16px;
+        background: #181b1d;
+        color: #f5f5f5;
+
+        &:hover {
+            border-color: #50595d;
+        }
+
+        &.cvat-item-selected {
+            border-color: #1890ff;
+        }
+    }
+
+    .cvat-task-card-header {
+        order: 0;
+        width: 100%;
+        height: 18px;
+        margin-bottom: 6px;
+    }
+
+    .cvat-task-card-preview-link {
+        order: 1;
+        width: 100%;
+        height: 120px;
+        margin: 3px 0 8px;
+
+        .cvat-task-item-preview-wrapper {
+            width: 100%;
+            height: 100%;
+
+            > .cvat-task-item-preview {
+                width: 100%;
+                height: 100%;
+                max-width: 100%;
+                max-height: 100%;
+                object-fit: cover;
+            }
+        }
+
+        .cvat-task-item-loading-preview,
+        .cvat-task-item-empty-preview {
+            width: 100%;
+            height: 100%;
+        }
+    }
+
+    .cvat-task-card-details {
+        order: 2;
+        width: 100%;
+        min-width: 0;
+        text-align: center;
+    }
+
+    .cvat-task-card-title-link {
+        text-align: center;
+    }
+
+    .cvat-task-card-title {
+        font-size: 16px;
+        text-align: center;
+    }
+
+    .cvat-task-card-id {
+        color: #929292;
+    }
+
+    .cvat-task-card-name {
+        color: #f5f5f5;
+    }
+
+    .cvat-task-card-subtitle,
+    .cvat-task-card-progress {
+        display: none;
+    }
+
+    .cvat-task-card-metadata {
+        order: 3;
+        width: 85%;
+        min-height: 34px;
+        // Keep the frame-count bar directly below the title instead of
+        // pushing it to the bottom of a tall, stretched card.
+        margin: 8px auto 0;
+        background: #222526;
+        color: #eeeeee;
+        font-size: 16px;
+        font-weight: 600;
+    }
+}
+
+// Project task list view: horizontal rows rather than cards.
+.cvat-project-tasks-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    .cvat-tasks-list {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+    }
+
+    .ant-ribbon-wrapper {
+        width: 100%;
+        margin: 0;
+    }
+}
+
+@media (max-width: 1050px) {
+    .cvat-tasks-list-item {
+        grid-template-columns: 110px minmax(150px, 1fr) minmax(150px, 0.8fr) 90px 38px;
+        column-gap: $grid-unit-size;
+    }
+}
+
+@media (max-width: 1050px) {
+    .cvat-project-tasks-grid,
+    .cvat-project-tasks-grid .cvat-tasks-list {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 760px) {
+    .cvat-tasks-list-item {
+        grid-template-columns: 100px minmax(0, 1fr) 40px;
+        grid-template-areas:
+            'preview details header'
+            'preview metadata metadata'
+            'progress progress progress';
+        row-gap: $grid-unit-size;
+    }
+
+    .cvat-task-card-progress {
+        padding-top: $grid-unit-size;
+    }
+
+    .cvat-project-tasks-grid,
+    .cvat-project-tasks-grid .cvat-tasks-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 450px) {
+    .cvat-project-tasks-grid,
+    .cvat-project-tasks-grid .cvat-tasks-list {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+// Project-page toggle between the existing list rows and the custom task cards.
+.cvat-project-task-view-toggle {
+    margin-left: $grid-unit-size;
+}
+
+// Keep the project pagination the same distance below the tasks in both views.
+// The project-page Row must have className='cvat-project-tasks-pagination-row'.
+.cvat-project-tasks-pagination-row {
+    // Slightly larger separation after the task grid, without changing card gaps.
+    margin-top: 20px !important;
+    margin-bottom: 0 !important;
+}
+
+// The Pagination component itself should not add extra vertical space.
+.cvat-project-tasks-pagination {
+    margin: 0 !important;
 }

@@ -17,7 +17,9 @@ import Popover from 'antd/lib/popover';
 import Title from 'antd/lib/typography/Title';
 import Pagination from 'antd/lib/pagination';
 import { MultiPlusIcon } from 'icons';
-import { PlusOutlined, SoundOutlined } from '@ant-design/icons';
+import {
+    AppstoreOutlined, PlusOutlined, SoundOutlined, UnorderedListOutlined,
+} from '@ant-design/icons';
 import Empty from 'antd/lib/empty';
 import Input from 'antd/lib/input';
 import notification from 'antd/lib/notification';
@@ -58,6 +60,24 @@ interface ParamType {
     id: string;
 }
 
+type TaskView = 'list' | 'grid';
+
+const TASK_VIEW_STORAGE_KEY = 'cvat-project-task-view';
+
+function getStoredTaskView(): TaskView {
+    if (typeof window === 'undefined') {
+        return 'list';
+    }
+
+    try {
+        const storedView = window.localStorage.getItem(TASK_VIEW_STORAGE_KEY);
+        return storedView === 'grid' ? 'grid' : 'list';
+    } catch {
+        // Local storage may be unavailable; fall back to list view.
+        return 'list';
+    }
+}
+
 export default function ProjectPageComponent(): JSX.Element {
     const id = +useParams<ParamType>().id;
     const dispatch = useDispatch();
@@ -88,6 +108,7 @@ export default function ProjectPageComponent(): JSX.Element {
         bulkFetching: state.bulkActions.fetching,
     }), shallowEqual);
     const [visibility, setVisibility] = useState(defaultVisibility);
+    const [taskView, setTaskView] = useState<TaskView>(getStoredTaskView);
 
     const updatedQuery = useResourceQuery<TasksQuery>(tasksQuery);
 
@@ -132,6 +153,15 @@ export default function ProjectPageComponent(): JSX.Element {
             search: updateHistoryFromQuery(tasksQuery),
         });
     }, [tasksQuery]);
+
+    // Remember the last selected project task layout across reloads and projects.
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(TASK_VIEW_STORAGE_KEY, taskView);
+        } catch {
+            // The selected view still works for this session if storage is unavailable.
+        }
+    }, [taskView]);
 
     useEffect(() => {
         if (deletes[id]) {
@@ -210,13 +240,20 @@ export default function ProjectPageComponent(): JSX.Element {
                     {subsets.map((subset: string) => (
                         <React.Fragment key={subset}>
                             {subset && <Title level={4}>{subset}</Title>}
-                            {renderTasksForSubset(subset, selectProps)}
+                            <div className={`cvat-project-tasks-${taskView}`}>
+                                {renderTasksForSubset(subset, selectProps)}
+                            </div>
                         </React.Fragment>
                     ))}
-                    <Row justify='center' align='middle'>
+                    <Row
+                        className='cvat-project-tasks-pagination-row'
+                        justify='center'
+                        align='middle'
+                    >
                         <Col md={22} lg={18} xl={16} xxl={14}>
                             <Pagination
                                 className='cvat-project-tasks-pagination'
+                                style={{ margin: 0 }}
                                 onChange={(
                                     page: number,
                                     pageSize: number,
@@ -331,6 +368,18 @@ export default function ProjectPageComponent(): JSX.Element {
                                     }}
                                 />
                                 <TasksCSVExportButton query={{ ...tasksQuery, projectId: id }} />
+                                <Button
+                                    className='cvat-project-task-view-toggle'
+                                    icon={taskView === 'list' ? <AppstoreOutlined /> : <UnorderedListOutlined />}
+                                    aria-pressed={taskView === 'grid'}
+                                    onClick={() => {
+                                        setTaskView((currentView) => (
+                                            currentView === 'list' ? 'grid' : 'list'
+                                        ));
+                                    }}
+                                >
+                                    View
+                                </Button>
                             </div>
                         </div>
                         <Popover
