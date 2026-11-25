@@ -189,19 +189,34 @@ function TaskItemComponent(props: TaskItemProps): JSX.Element {
             onContextMenuCapture={handleContextMenuCapture}
         >
             <Col span={4}>
-                <Preview
-                    task={taskInstance}
-                    loadingClassName='cvat-task-item-loading-preview'
-                    emptyPreviewClassName='cvat-task-item-empty-preview'
-                    previewWrapperClassName='cvat-task-item-preview-wrapper'
-                    previewClassName='cvat-task-item-preview'
-                />
+                <Link
+                    to={`/tasks/${id}`}
+                    className='cvat-task-item-preview-link'
+                >
+                    <Preview
+                        task={taskInstance}
+                        loadingClassName='cvat-task-item-loading-preview'
+                        emptyPreviewClassName='cvat-task-item-empty-preview'
+                        previewWrapperClassName='cvat-task-item-preview-wrapper'
+                        previewClassName='cvat-task-item-preview'
+                    />
+                </Link>
             </Col>
             <Col span={10} className='cvat-task-item-description'>
-                <Text ellipsis={{ tooltip: taskInstance.name }}>
-                    <Text strong type='secondary' className='cvat-item-task-id'>{`#${id}: `}</Text>
-                    <Text strong className='cvat-item-task-name'>{taskInstance.name}</Text>
-                </Text>
+                <Link
+                    to={`/tasks/${id}`}
+                    className='cvat-task-item-title-link'
+                >
+                    <Text ellipsis={{ tooltip: taskInstance.name }}>
+                        <Text strong type='secondary' className='cvat-item-task-id'>
+                            {`#${id}: `}
+                        </Text>
+                        <Text strong className='cvat-item-task-name'>
+                            {taskInstance.name}
+                        </Text>
+                    </Text>
+                </Link>
+
                 <br />
                 {owner && (
                     <>
