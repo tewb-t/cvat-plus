@@ -215,6 +215,50 @@
     }
 }
 
+.cvat-player-frame-preview {
+    position: absolute;
+    top: calc(100% + $grid-unit-size);
+    z-index: 110;
+    box-sizing: border-box;
+    width: 196px;
+    padding: $grid-unit-size * 0.5;
+    transform: translateX(-50%);
+    border: 1px solid rgba(128, 128, 128, 0.35);
+    border-radius: $border-radius-base;
+    background: $background-color-2;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+    line-height: normal;
+
+    > img {
+        display: block;
+        width: 100%;
+        height: auto;
+        max-height: 110px;
+        object-fit: contain;
+        background: #000;
+    }
+
+    > span {
+        display: block;
+        margin-top: 5px;
+        color: $text-color;
+        font-size: 12px;
+        line-height: 16px;
+        text-align: center;
+    }
+}
+
+.cvat-player-frame-preview-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 101px;
+    color: $text-color;
+    font-size: 11px;
+    background: rgba(0, 0, 0, 0.12);
+}
+
 .cvat-player-filename-wrapper {
     max-width: $grid-unit-size * 30;
     max-height: $grid-unit-size * 3;

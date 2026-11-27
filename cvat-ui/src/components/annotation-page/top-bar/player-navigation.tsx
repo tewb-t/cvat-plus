@@ -4,8 +4,9 @@
 // SPDX-License-Identifier: MIT
 
 import React, {
-    useState, useEffect, useCallback, CSSProperties,
+    useState, useEffect, useCallback, useRef, CSSProperties,
 } from 'react';
+import { useSelector } from 'react-redux';
 
 import { Row, Col } from 'antd/lib/grid';
 import Icon, {
@@ -26,6 +27,7 @@ import { clamp } from 'utils/math';
 import GlobalHotKeys, { KeyMap } from 'utils/mousetrap-react';
 import { ShortcutScope } from 'utils/enums';
 import { subKeyMap } from 'utils/component-subkeymap';
+import { Job } from 'cvat-core-wrapper';
 import { Chapter } from 'cvat-core/src/frames';
 import { usePlugins } from 'utils/hooks';
 
@@ -47,6 +49,7 @@ interface Props {
     inputFrameRef: React.RefObject<HTMLInputElement>;
     keyMap: KeyMap;
     workspace: Workspace;
+    jobInstance: Job;
     onSliderChange(value: number): void;
     onInputChange(value: number): void;
     onURLIconClick(): void;
@@ -56,6 +59,20 @@ interface Props {
     switchNavigationBlocked(blocked: boolean): void;
     switchShowSearchPallet(visible: boolean): void;
 }
+
+interface HoverPreviewState {
+    frame: number;
+    left: number;
+    src: string | null;
+    failed: boolean;
+}
+
+const HOVER_PREVIEW_DELAY_MS = 120;
+const HOVER_PREVIEW_WIDTH = 196;
+const HOVER_PREVIEW_CACHE_SIZE = 60;
+const HOVER_PREVIEW_TOLERANCE = 10;
+const HOVER_PREVIEW_PREFETCH_DELAY_MS = 250;
+const HOVER_PREVIEW_PREFETCH_COUNT = 2;
 
 const componentShortcuts = {
     DELETE_FRAME: {
@@ -99,6 +116,7 @@ function PlayerNavigation(props: Props): JSX.Element {
         ranges,
         keyMap,
         workspace,
+        jobInstance,
         onSliderChange,
         onInputChange,
         onURLIconClick,
@@ -111,6 +129,19 @@ function PlayerNavigation(props: Props): JSX.Element {
     } = props;
 
     const [frameInputValue, setFrameInputValue] = useState<number>(frameNumber);
+    const [hoverPreview, setHoverPreview] = useState<HoverPreviewState | null>(null);
+
+    const frameFetching = useSelector(
+        (state: CombinedState) => state.annotation.player.frame.fetching,
+    );
+
+    const previewTimeoutRef = useRef<number | null>(null);
+    const previewRequestRef = useRef<AbortController | null>(null);
+    const pendingPreviewFrameRef = useRef<number | null>(null);
+    const previewCacheRef = useRef<Map<number, string>>(new Map());
+    const lastHoveredFrameRef = useRef<number | null>(null);
+    const prefetchTimeoutRef = useRef<number | null>(null);
+    const prefetchRequestRef = useRef<AbortController | null>(null);
 
     const playerSliderPlugins = usePlugins(
         (state: CombinedState) => state.plugins.components.annotationPage.player.slider,
@@ -122,6 +153,264 @@ function PlayerNavigation(props: Props): JSX.Element {
             setFrameInputValue(frameNumber);
         }
     }, [frameNumber]);
+
+    const hideHoverPreview = useCallback((): void => {
+        if (previewTimeoutRef.current !== null) {
+            window.clearTimeout(previewTimeoutRef.current);
+            previewTimeoutRef.current = null;
+        }
+
+        previewRequestRef.current?.abort();
+        previewRequestRef.current = null;
+        pendingPreviewFrameRef.current = null;
+        setHoverPreview(null);
+    }, []);
+
+    const cachePreviewSrc = useCallback((frame: number, src: string): void => {
+        const cache = previewCacheRef.current;
+        // Re-inserting moves the frame to the end of the Map, so the least
+        // recently used entry is evicted first.
+        cache.delete(frame);
+        cache.set(frame, src);
+
+        while (cache.size > HOVER_PREVIEW_CACHE_SIZE) {
+            const [oldestFrame, oldestSrc] = cache.entries().next().value;
+            cache.delete(oldestFrame);
+            URL.revokeObjectURL(oldestSrc);
+        }
+    }, []);
+
+    const cachedPreviewSrc = useCallback((frame: number): string | null => {
+        const cache = previewCacheRef.current;
+        const src = cache.get(frame);
+        if (src === undefined) {
+            return null;
+        }
+
+        cache.delete(frame);
+        cache.set(frame, src);
+        return src;
+    }, []);
+
+    const nearestCachedPreview = useCallback((frame: number): string | null => {
+        const cache = previewCacheRef.current;
+        let nearestFrame: number | null = null;
+        for (const cachedFrame of cache.keys()) {
+            if (Math.abs(cachedFrame - frame) > HOVER_PREVIEW_TOLERANCE) {
+                continue;
+            }
+
+            if (nearestFrame === null
+                || Math.abs(cachedFrame - frame) < Math.abs(nearestFrame - frame)
+            ) {
+                nearestFrame = cachedFrame;
+            }
+        }
+
+        if (nearestFrame === null) {
+            return null;
+        }
+
+        const src = cache.get(nearestFrame);
+        if (src === undefined) {
+            return null;
+        }
+
+        cache.delete(nearestFrame);
+        cache.set(nearestFrame, src);
+        return src;
+    }, []);
+
+    const fetchPreviewSrc = useCallback(async (
+        frame: number,
+        signal: AbortSignal,
+    ): Promise<string | null> => {
+        if (jobInstance.taskId === null) {
+            return null;
+        }
+
+        // Single frame from the task data endpoint. The slider value is a task
+        // frame number, and compressed quality keeps the preview cheap.
+        const query = new URLSearchParams({
+            type: 'frame',
+            number: String(frame),
+            quality: 'compressed',
+        });
+
+        const response = await fetch(`/api/tasks/${jobInstance.taskId}/data/?${query.toString()}`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            signal,
+        });
+
+        if (!response.ok) {
+            return null;
+        }
+
+        const blob = await response.blob();
+        if (signal.aborted || blob.size === 0) {
+            return null;
+        }
+
+        return URL.createObjectURL(blob);
+    }, [jobInstance]);
+
+    const prefetchNeighbors = useCallback((frame: number, direction: number): void => {
+        const neighbors: number[] = [];
+        for (let offset = 1; offset <= HOVER_PREVIEW_PREFETCH_COUNT; offset += 1) {
+            const neighbor = clamp(frame + direction * offset, startFrame, stopFrame);
+            if (neighbor === frame
+                || previewCacheRef.current.has(neighbor)
+                || pendingPreviewFrameRef.current === neighbor
+            ) {
+                continue;
+            }
+
+            neighbors.push(neighbor);
+        }
+
+        if (!neighbors.length) {
+            return;
+        }
+
+        const controller = new AbortController();
+        prefetchRequestRef.current?.abort();
+        prefetchRequestRef.current = controller;
+
+        for (const neighbor of neighbors) {
+            fetchPreviewSrc(neighbor, controller.signal).then((src) => {
+                if (!controller.signal.aborted && src) {
+                    cachePreviewSrc(neighbor, src);
+                }
+            }).catch(() => {
+                // Prefetching is opportunistic; failures are silently ignored.
+            });
+        }
+    }, [cachePreviewSrc, fetchPreviewSrc, startFrame, stopFrame]);
+
+    const onSliderMouseMove = useCallback((event: React.MouseEvent<HTMLElement>): void => {
+        // The preview must not compete with the main player frame loading.
+        if (playing || frameFetching || stopFrame <= startFrame) {
+            return;
+        }
+
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (!bounds.width) {
+            return;
+        }
+
+        const ratio = clamp((event.clientX - bounds.left) / bounds.width, 0, 1);
+        const frame = Math.round(startFrame + ratio * (stopFrame - startFrame));
+        const halfPreviewWidth = HOVER_PREVIEW_WIDTH / 2;
+        const left = clamp(
+            event.clientX - bounds.left,
+            halfPreviewWidth,
+            Math.max(halfPreviewWidth, bounds.width - halfPreviewWidth),
+        );
+
+        const exactSrc = cachedPreviewSrc(frame);
+        // A nearby cached frame is shown immediately while the exact frame
+        // loads; the tolerance is acceptable for a scrubbing preview.
+        const nearestSrc = exactSrc ?? nearestCachedPreview(frame);
+        setHoverPreview((current) => (
+            current?.frame === frame
+                ? { ...current, left }
+                : { frame, left, src: nearestSrc, failed: false }
+        ));
+
+        const direction = lastHoveredFrameRef.current === null
+            || lastHoveredFrameRef.current === frame
+            ? 0
+            : Math.sign(frame - lastHoveredFrameRef.current);
+        lastHoveredFrameRef.current = frame;
+
+        if (prefetchTimeoutRef.current !== null) {
+            window.clearTimeout(prefetchTimeoutRef.current);
+            prefetchTimeoutRef.current = null;
+        }
+
+        if (direction !== 0) {
+            // The guard uses values captured at scheduling time; pressing Play
+            // within the delay window can let the prefetch through, which
+            // costs two extra frame decodes at most.
+            prefetchTimeoutRef.current = window.setTimeout(() => {
+                prefetchTimeoutRef.current = null;
+                prefetchNeighbors(frame, direction);
+            }, HOVER_PREVIEW_PREFETCH_DELAY_MS);
+        }
+
+        if (exactSrc || pendingPreviewFrameRef.current === frame) {
+            return;
+        }
+
+        pendingPreviewFrameRef.current = frame;
+        if (previewTimeoutRef.current !== null) {
+            window.clearTimeout(previewTimeoutRef.current);
+        }
+
+        const controller = new AbortController();
+        previewRequestRef.current?.abort();
+        previewRequestRef.current = controller;
+
+        previewTimeoutRef.current = window.setTimeout(async () => {
+            previewTimeoutRef.current = null;
+            try {
+                const src = await fetchPreviewSrc(frame, controller.signal);
+                if (controller.signal.aborted) {
+                    return;
+                }
+
+                if (src) {
+                    cachePreviewSrc(frame, src);
+                }
+
+                setHoverPreview((current) => {
+                    if (current?.frame !== frame) {
+                        return current;
+                    }
+
+                    return src ? { ...current, src } : { ...current, failed: true };
+                });
+            } catch {
+                // Aborted requests are expected while the pointer moves on;
+                // real failures only degrade the preview, never annotation.
+                if (!controller.signal.aborted) {
+                    setHoverPreview((current) => (
+                        current?.frame === frame ? { ...current, failed: true } : current
+                    ));
+                }
+            } finally {
+                if (pendingPreviewFrameRef.current === frame) {
+                    pendingPreviewFrameRef.current = null;
+                }
+            }
+        }, HOVER_PREVIEW_DELAY_MS);
+    }, [
+        cachedPreviewSrc, cachePreviewSrc, fetchPreviewSrc, nearestCachedPreview,
+        prefetchNeighbors, frameFetching, playing, startFrame, stopFrame,
+    ]);
+
+    useEffect(() => {
+        if (playing || frameFetching) {
+            hideHoverPreview();
+        }
+    }, [frameFetching, hideHoverPreview, playing]);
+
+    useEffect(() => () => {
+        if (previewTimeoutRef.current !== null) {
+            window.clearTimeout(previewTimeoutRef.current);
+        }
+
+        if (prefetchTimeoutRef.current !== null) {
+            window.clearTimeout(prefetchTimeoutRef.current);
+        }
+
+        previewRequestRef.current?.abort();
+        prefetchRequestRef.current?.abort();
+        for (const src of previewCacheRef.current.values()) {
+            URL.revokeObjectURL(src);
+        }
+    }, []);
 
     const showDeleteFrameDialog = useCallback(() => {
         if (!playing) {
@@ -216,7 +505,11 @@ function PlayerNavigation(props: Props): JSX.Element {
             )}
             <Col className='cvat-player-controls'>
                 <Row align='bottom'>
-                    <Col style={{ position: 'relative' }}>
+                    <Col
+                        style={{ position: 'relative' }}
+                        onMouseMove={onSliderMouseMove}
+                        onMouseLeave={hideHoverPreview}
+                    >
                         <Slider
                             className='cvat-player-slider'
                             min={startFrame}
@@ -245,6 +538,25 @@ function PlayerNavigation(props: Props): JSX.Element {
                                 const ComponentToRender = Component as React.ComponentType<any>;
                                 return <ComponentToRender key={index} targetProps={props} />;
                             })}
+                        {hoverPreview && (
+                            <div
+                                className='cvat-player-frame-preview'
+                                style={{ left: hoverPreview.left }}
+                            >
+                                {hoverPreview.src ? (
+                                    <img
+                                        src={hoverPreview.src}
+                                        alt={`Frame ${hoverPreview.frame}`}
+                                        draggable={false}
+                                    />
+                                ) : (
+                                    <div className='cvat-player-frame-preview-placeholder'>
+                                        {hoverPreview.failed ? 'Preview unavailable' : 'Loading frame...'}
+                                    </div>
+                                )}
+                                <span>{`Frame ${hoverPreview.frame}`}</span>
+                            </div>
+                        )}
                     </Col>
                 </Row>
                 <Row justify='center'>
